@@ -28,6 +28,27 @@ def decode_pred_annotation(anno):
     return conf, bbox
 
 
+def process_ilegal_bbox(x_min, y_min, bbox_width, bbox_height):
+
+    MIN_AREA = 240
+    MAX_AREA = 20000
+
+    x_min = min(max(0, x_min), 1280)
+    y_min = min(max(0, y_min), 720)
+    bbox_width = min(1280-x_min, bbox_width)
+    bbox_height = min(720-y_min, bbox_height)
+    x_max = x_min + bbox_width
+    y_max = y_min + bbox_height
+
+    area = bbox_width * bbox_height
+    if area < MIN_AREA or area > MAX_AREA:
+        return None
+
+    if (x_min >= 1280) or (y_min >= 720):
+        return None
+    return x_min, y_min, bbox_width, bbox_height
+
+
 def run_track(df_path, save, distance_threshold=30, hit_inertia_min=3, hit_inertia_max=6, initialization_delay=1):
 
     tracker = Tracker(
@@ -48,7 +69,7 @@ def run_track(df_path, save, distance_threshold=30, hit_inertia_min=3, hit_inert
         anno = row.preds + " "
         tracked_objects = tracker.update(detections=coco2norfair(bbox, conf, frame_id))
         for tobj in tracked_objects:
-            cnt += 1
+
             bbox_width, bbox_height, last_detected_frame_id = tobj.last_detection.data
             if last_detected_frame_id == frame_id:  # Skip objects that were detected on current frame
                 continue
@@ -57,6 +78,11 @@ def run_track(df_path, save, distance_threshold=30, hit_inertia_min=3, hit_inert
             xc, yc = tobj.estimate[0]
             x_min, y_min = int(round(xc - bbox_width / 2)), int(round(yc - bbox_height / 2))
             score = tobj.last_detection.scores[0]
+            process_result = process_ilegal_bbox(x_min, y_min, bbox_width, bbox_height)
+            if process_result is None:
+                continue
+            cnt += 1
+            x_min, y_min, bbox_width, bbox_height = process_result
             anno += '{} {} {} {} {} '.format(score, x_min, y_min, bbox_width, bbox_height)
 
         result.append(anno.strip(' '))

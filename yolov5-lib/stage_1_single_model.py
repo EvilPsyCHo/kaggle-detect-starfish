@@ -157,7 +157,6 @@ def yolo_predict(model, img, conf, size=3600, augment=False, return_str=False):
 
 
 def format_prediction(bboxes, confs):
-    # bboxes voc
     annot = ""
     if len(confs) == 0:
         return annot
