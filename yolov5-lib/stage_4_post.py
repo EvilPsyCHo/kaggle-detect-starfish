@@ -138,7 +138,7 @@ def format_prediction(bboxes, confs):
         return annot
 
     else:
-        bboxes = voc2coco(bboxes)
+        # bboxes = voc2coco(bboxes)
         for idx in range(len(bboxes)):
             xmin, ymin, w, h = bboxes[idx]
             conf = confs[idx]
@@ -148,10 +148,12 @@ def format_prediction(bboxes, confs):
     return annot
 
 
-tfm = A.Compose([A.Resize(224, 224, interpolation=cv2.INTER_LANCZOS4),
-                A.Normalize(mean=[0], std=[1], max_pixel_value=255.0, p=1.0),
-                ToTensorV2(p=1.0),
-            ], p=1.0)
+import timm
+import torch
+from torch import nn
+import albumentations as A
+from albumentations.pytorch import ToTensorV2
+from albumentations import *
 
 
 class RegHead(nn.Module):
@@ -228,15 +230,20 @@ class PawModel(nn.Module):
         return x
 
 
-def cls_predict(cls_model, img, crops):
+tfm = A.Compose([A.Resize(224, 224, interpolation=cv2.INTER_LANCZOS4),
+                 A.Normalize(mean=[0], std=[1], max_pixel_value=255.0, p=1.0),
+                 ToTensorV2(p=1.0),
+                 ], p=1.0)
+
+
+def get_prediction(cls_model, img, crops):
     conf = []
 
     with torch.no_grad():
         for crop in crops:
+            # print(crop)
             x, y, x2, y2 = crop.astype(int)
-
             img_ = img[y:y2, x:x2, :]
-            # print("crop", crop, img.shape, img_.shape)
             img_pt = tfm(image=img_)['image'].unsqueeze(0).to('cuda:0')
             p = cls_model(img_pt)[0].sigmoid().detach().cpu().numpy()[0]
             conf += [p]
@@ -244,7 +251,7 @@ def cls_predict(cls_model, img, crops):
     return np.array(conf)
 
 
-def _run_single_fold(df, post_model, CONF):
+def _run_single_fold(df, post_model, CLS_CONF):
     cnt = 0
     cnt_all = 0
     df = df.copy().fillna("")
@@ -255,21 +262,23 @@ def _run_single_fold(df, post_model, CONF):
         if anno == "":
             preds.append(anno)
             continue
+        # print(anno)
         score, bbox = decode_pred_annotation(anno)
         voc_bbox = coco2voc(bbox)
-        image = cv2.imread(row.image_path)[:,:,::-1]
-        cls_conf = cls_predict(post_model, image, voc_bbox)
+        image = cv2.cvtColor(cv2.imread(row.image_path), cv2.COLOR_BGR2RGB)
+        cls_confs = get_prediction(post_model, image, voc_bbox)
 
-        keep = cls_conf > CONF
-        cnt += np.sum(cls_conf < CONF)
-        cnt_all += len(cls_conf)
+        # print(bbox)
+        keep = cls_confs > CLS_CONF
         bbox = bbox[keep]
         score = score[keep]
 
+        cnt += np.sum(cls_confs < CLS_CONF)
+        cnt_all += len(cls_confs)
         preds.append(format_prediction(bbox, score))
 
-    df['preds'] = preds
-    return df, cnt, cnt_all
+    # df['preds'] = preds
+    return preds, cnt, cnt_all
 
 
 def run_post(df_path, post_models, save, CLS_CONF):
@@ -287,20 +296,23 @@ def run_post(df_path, post_models, save, CLS_CONF):
         model = PawModel('swin_large_patch4_window7_224', pretrained=False, n_class=1).to(device)
         model.load_state_dict(torch.load(post_models[video_id], map_location=device))
         model.eval()
-        df_video, cnt, cnt_all = _run_single_fold(df.loc[df.video_id == video_id], model, CLS_CONF)
-        result.append(df_video)
+        preds, cnt, cnt_all = _run_single_fold(df.loc[df.video_id == video_id], model, CLS_CONF)
+        result.extend(preds)
         cnts += cnt
         cnts_all += cnt_all
 
-    results = pd.concat(result, axis=0).sort_values(['video_id', 'video_frame']).reset_index(drop=True)
-    results.to_csv(save, index=None)
-
-    print(f"Finished, post model drop {cnts/cnts_all*100:.1f}% bbox")
+    # results = pd.concat(result, axis=0).sort_values(['video_id', 'video_frame']).reset_index(drop=True)
+    # results.to_csv(save, index=None)
+    df['preds'] = result
+    df.to_csv(save, index=None)
+    print(f"Finished, post model drop {cnts/cnts_all*100:.1f}% bbox in totle {cnts_all}")
 
 
 if __name__ == "__main__":
-    cls0 = "./checkpoints/KH/cls_v2/fold_0_ep_1"
-    cls1 = "./checkpoints/KH/cls_v2/fold_1_ep_1"
-    cls2 = "./checkpoints/KH/cls_v2/fold_2_ep_1"
-    models = [cls0, cls1, cls2]
-    run_post("./stage_cache/track/test.csv", models, "./stage_cache/post/test.csv", 0.9)
+    from stage_eval import evaluate
+    cls_old = "./checkpoints/KH/swin_large_patch4_window7_224_oof_cls/fold_1_ep_1"
+    pd.read_csv("./stage_cache/track/test.csv").head(1000).to_csv("./stage_cache/track/sub.csv")
+    models = [cls_old, cls_old, cls_old]
+    run_post("./stage_cache/track/sub.csv", models, "./stage_cache/post/sub.csv", CLS_CONF=0.2)
+    evaluate("./stage_cache/track/sub.csv")
+    evaluate("./stage_cache/post/sub.csv")
