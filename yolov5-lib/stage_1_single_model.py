@@ -176,6 +176,36 @@ def load_image(image_path):
     return cv2.cvtColor(cv2.imread(image_path), cv2.COLOR_BGR2RGB)
 
 
+def run_single_model(ckpts, data_files, save_path, size, nms_conf, nms_iou, aug):
+    Path(save_path).parent.mkdir(parents=True, exist_ok=True)
+    results = []
+    start = time.time()
+    for ckpt, file in zip(ckpts, data_files):
+        df = pd.read_csv(file)
+        val = df[df.fold == 'val'].reset_index(drop=True)
+        val = val.sort_values(['video_id', 'video_frame'])
+        # print(ckpt)
+        yolo_model = load_yolo_model(ckpt, nms_conf, nms_iou, max_det=1000)
+        r = _run_fold_predict(yolo_model, val, size, nms_conf, aug)
+        results.append(r)
+    use_minute = (time.time() - start) / 60
+    pd.concat(results, axis=0).reset_index(drop=True).to_csv(save_path, index=None)
+    print(f"finished use {use_minute:.1f} minutes, save in {save_path}")
+
+
+def _run_fold_predict(model, val, size, infer_conf, aug):
+    preds = []
+    for i, row in tqdm(val.iterrows()):
+        image = load_image(row.image_path)
+        pred_bbox, pred_conf = yolo_predict(model, image, infer_conf, size, aug)
+        pred_annotation = format_prediction(pred_bbox, pred_conf)
+        preds.append(pred_annotation)
+
+    val['preds'] = preds
+
+    return val.fillna("")
+
+
 def parse_args():
     parser = argparse.ArgumentParser()
     parser.add_argument("--ckpt", type=str, help="model path")
