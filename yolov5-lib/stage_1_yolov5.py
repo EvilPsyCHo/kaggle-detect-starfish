@@ -142,7 +142,7 @@ def load_yolo_model(ckpt_path, conf=None, iou=None, max_det=None):
     return model
 
 
-def yolo_predict(model, img, conf, size=3600, augment=False, return_str=False):
+def yolo_predict(model, img, conf=None, size=3600, augment=False, return_str=False):
     results = model(img, size=size, augment=augment)  # custom inference size
     preds = results.pandas().xyxy[0]
     bboxes = preds[['xmin', 'ymin', 'xmax', 'ymax']].values
@@ -176,7 +176,7 @@ def load_image(image_path):
     return cv2.cvtColor(cv2.imread(image_path), cv2.COLOR_BGR2RGB)
 
 
-def run_single_model(ckpts, data_files, save_path, size, nms_conf, nms_iou, aug):
+def run_yolov5(ckpts, data_files, save_path, size, nms_conf, nms_iou, aug, max_det=1000):
     Path(save_path).parent.mkdir(parents=True, exist_ok=True)
     results = []
     start = time.time()
@@ -185,7 +185,7 @@ def run_single_model(ckpts, data_files, save_path, size, nms_conf, nms_iou, aug)
         val = df[df.fold == 'val'].reset_index(drop=True)
         val = val.sort_values(['video_id', 'video_frame'])
         # print(ckpt)
-        yolo_model = load_yolo_model(ckpt, nms_conf, nms_iou, max_det=1000)
+        yolo_model = load_yolo_model(ckpt, nms_conf, nms_iou, max_det=max_det)
         r = _run_fold_predict(yolo_model, val, size, nms_conf, aug)
         results.append(r)
     use_minute = (time.time() - start) / 60
